@@ -122,7 +122,7 @@ def bsp_update_kconfig(dist_dir):
                 line = line[0:position] + 'default "rt-thread"\n'
                 found = 0
             f.write(line)
-            
+
 def bsp_update_kconfig_library(dist_dir):
     # change RTT_ROOT in Kconfig
     if not os.path.isfile(os.path.join(dist_dir, 'Kconfig')):
@@ -139,6 +139,19 @@ def bsp_update_kconfig_library(dist_dir):
                 position = line.find('../libraries')
                 line = line[0:position] + 'libraries/Kconfig"\n'
                 found = 0
+            f.write(line)
+
+    # change board/kconfig path
+    if not os.path.isfile(os.path.join(dist_dir, 'board/Kconfig')):
+        return
+
+    with open(os.path.join(dist_dir, 'board/Kconfig'), 'r') as f:
+        data = f.readlines()
+    with open(os.path.join(dist_dir, 'board/Kconfig'), 'w') as f:
+        for line in data:
+            if line.find('../libraries/HAL_Drivers/Kconfig') != -1:
+                position = line.find('../libraries/HAL_Drivers/Kconfig')
+                line = line[0:position] + 'libraries/HAL_Drivers/Kconfig"\n'
             f.write(line)
 
 def bs_update_ide_project(bsp_root, rtt_root, rttide = None):
@@ -202,11 +215,11 @@ def MkDist_Strip(program, BSP_ROOT, RTT_ROOT, Env):
         shutil.copyfile(os.path.join(library_path, 'Kconfig'), os.path.join(library_dir, 'Kconfig'))
 
     # do bsp special dist handle
-    if 'dist_handle' in Env:       
+    if 'dist_handle' in Env:
         print("=> start dist handle")
         dist_handle = Env['dist_handle']
         dist_handle(BSP_ROOT)
-        
+
     # get all source files from program
     for item in program:
         walk_children(item)
@@ -323,20 +336,11 @@ def MkDist(program, BSP_ROOT, RTT_ROOT, Env, rttide = None):
     print('=> %s' % os.path.basename(BSP_ROOT))
     bsp_copy_files(BSP_ROOT, dist_dir)
 
-    # copy stm32 bsp libiary files
-    if os.path.basename(os.path.dirname(BSP_ROOT)) == 'stm32':
-        print("=> copy stm32 bsp library")
-        library_path = os.path.join(os.path.dirname(BSP_ROOT), 'libraries')
-        library_dir  = os.path.join(dist_dir, 'libraries')
-        bsp_copy_files(os.path.join(library_path, 'HAL_Drivers'), os.path.join(library_dir, 'HAL_Drivers'))
-        bsp_copy_files(os.path.join(library_path, Env['bsp_lib_type']), os.path.join(library_dir, Env['bsp_lib_type']))
-        shutil.copyfile(os.path.join(library_path, 'Kconfig'), os.path.join(library_dir, 'Kconfig'))
-
     # do bsp special dist handle
     if 'dist_handle' in Env:
         print("=> start dist handle")
         dist_handle = Env['dist_handle']
-        dist_handle(BSP_ROOT)
+        dist_handle(BSP_ROOT, dist_dir)
 
     # copy tools directory
     print('=> components')

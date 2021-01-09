@@ -709,6 +709,16 @@ static rt_int32_t sdio_initialize_function(struct rt_mmcsd_card *card,
     if (ret)
         goto err1;
 
+    /*
+     * product/manufacturer id is optional for function CIS, so
+     * copy it from the card structure as needed.
+     */
+    if (func->product == 0)
+    {
+        func->manufacturer = card->cis.manufacturer;
+        func->product = card->cis.product;
+    }
+
     card->sdio_function[func_num] = func;
 
     return 0;
@@ -882,9 +892,9 @@ static rt_int32_t sdio_init_card(struct rt_mmcsd_host *host, rt_uint32_t ocr)
 
     if (card->flags & CARD_FLAG_HIGHSPEED) 
     {
-        mmcsd_set_clock(host, 50000000);
-    } 
-    else 
+        mmcsd_set_clock(host, card->host->freq_max > 50000000 ? 50000000 : card->host->freq_max);
+    }
+    else
     {
         mmcsd_set_clock(host, card->cis.max_tran_speed);
     }

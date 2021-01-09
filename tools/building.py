@@ -28,6 +28,7 @@ import os
 import sys
 import string
 import utils
+import operator
 
 from SCons.Script import *
 from utils import _make_path_relative
@@ -169,12 +170,12 @@ def PrepareBuilding(env, root_directory, has_libcpu=False, remove_components = [
     AddOption('--project-path',
                       dest = 'project-path',
                       type = 'string',
-                      default = False,
+                      default = None,
                       help = 'set dist-ide project output path')
     AddOption('--project-name',
                       dest = 'project-name',
                       type = 'string',
-                      default = False,
+                      default = None,
                       help = 'set project name')
     AddOption('--reset-project-config',
                       dest = 'reset-project-config',
@@ -207,7 +208,12 @@ def PrepareBuilding(env, root_directory, has_libcpu=False, remove_components = [
     AddOption('--target',
                       dest = 'target',
                       type = 'string',
-                      help = 'set target project: mdk/mdk4/mdk5/iar/vs/vsc/ua/cdk/ses/makefile/eclipse')
+                      help = 'set target project: mdk/mdk4/mdk5/iar/vs/vsc/ua/cdk/ses/makefile/eclipse/codelite')
+    AddOption('--stackanalysis',
+                dest = 'stackanalysis',
+                action = 'store_true',
+                default = False,
+                help = 'thread stack static analysis')
     AddOption('--genconfig',
                 dest = 'genconfig',
                 action = 'store_true',
@@ -250,7 +256,8 @@ def PrepareBuilding(env, root_directory, has_libcpu=False, remove_components = [
                 'cdk':('gcc', 'gcc'),
                 'makefile':('gcc', 'gcc'),
                 'eclipse':('gcc', 'gcc'),
-                'ses' : ('gcc', 'gcc')}
+                'ses' : ('gcc', 'gcc'),
+                'codelite' : ('gcc', 'gcc')}
     tgt_name = GetOption('target')
 
     if tgt_name:
@@ -281,8 +288,8 @@ def PrepareBuilding(env, root_directory, has_libcpu=False, remove_components = [
             utils.ReloadModule(rtconfig)
 
     # add compability with Keil MDK 4.6 which changes the directory of armcc.exe
-    if rtconfig.PLATFORM == 'armcc':
-        if not os.path.isfile(os.path.join(rtconfig.EXEC_PATH, 'armcc.exe')):
+    if rtconfig.PLATFORM == 'armcc' or rtconfig.PLATFORM == 'armclang':
+        if rtconfig.PLATFORM == 'armcc' and not os.path.isfile(os.path.join(rtconfig.EXEC_PATH, 'armcc.exe')):
             if rtconfig.EXEC_PATH.find('bin40') > 0:
                 rtconfig.EXEC_PATH = rtconfig.EXEC_PATH.replace('bin40', 'armcc/bin')
                 Env['LINKFLAGS'] = Env['LINKFLAGS'].replace('RV31', 'armcc')
@@ -314,7 +321,7 @@ def PrepareBuilding(env, root_directory, has_libcpu=False, remove_components = [
         os.environ['PATH'] = rtconfig.EXEC_PATH + ":" + os.environ['PATH']
 
     # add program path
-    env.PrependENVPath('PATH', rtconfig.EXEC_PATH)
+    env.PrependENVPath('PATH', os.environ['PATH'])
     # add rtconfig.h/BSP path into Kernel group
     DefineGroup("Kernel", [], [], CPPPATH=[str(Dir('#').abspath)])
 
@@ -362,6 +369,11 @@ def PrepareBuilding(env, root_directory, has_libcpu=False, remove_components = [
         genconfig()
         exit(0)
 
+    if GetOption('stackanalysis'):
+        from WCS import ThreadStackStaticAnalysis
+        ThreadStackStaticAnalysis(Env)
+        exit(0)
+    
     if env['PLATFORM'] != 'win32':
         AddOption('--menuconfig',
                     dest = 'menuconfig',
@@ -377,7 +389,7 @@ def PrepareBuilding(env, root_directory, has_libcpu=False, remove_components = [
                 dest = 'pyconfig',
                 action = 'store_true',
                 default = False,
-                help = 'make menuconfig for RT-Thread BSP')
+                help = 'Python GUI menuconfig for RT-Thread BSP')
     AddOption('--pyconfig-silent',
                 dest = 'pyconfig_silent',
                 action = 'store_true',
@@ -385,14 +397,14 @@ def PrepareBuilding(env, root_directory, has_libcpu=False, remove_components = [
                 help = 'Don`t show pyconfig window')
 
     if GetOption('pyconfig_silent'):    
-        from menuconfig import pyconfig_silent
+        from menuconfig import guiconfig_silent
 
-        pyconfig_silent(Rtt_Root)
+        guiconfig_silent(Rtt_Root)
         exit(0)
     elif GetOption('pyconfig'):
-        from menuconfig import pyconfig
+        from menuconfig import guiconfig
 
-        pyconfig(Rtt_Root)
+        guiconfig(Rtt_Root)
         exit(0)
 
     configfn = GetOption('useconfig')
@@ -675,8 +687,16 @@ def DefineGroup(name, src, depend, **parameters):
             MergeGroup(g, group)
             return objs
 
+    def PriorityInsertGroup(groups, group):
+        length = len(groups)
+        for i in range(0, length):
+            if operator.gt(groups[i]['name'].lower(), group['name'].lower()):
+                groups.insert(i, group)
+                return
+        groups.append(group)
+
     # add a new group
-    Projects.append(group)
+    PriorityInsertGroup(Projects, group)
 
     return objs
 
@@ -853,6 +873,10 @@ def GenTargetProject(program = None):
     if GetOption('target') == 'eclipse':
         from eclipse import TargetEclipse
         TargetEclipse(Env, GetOption('reset-project-config'), GetOption('project-name'))
+        
+    if GetOption('target') == 'codelite':
+        from codelite import TargetCodelite
+        TargetCodelite(Projects, program)
 
 
 def EndBuilding(target, program = None):

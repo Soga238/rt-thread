@@ -23,10 +23,8 @@ STM32F0xx_HAL_Driver/Src/stm32f0xx_ll_gpio.c
 STM32F0xx_HAL_Driver/Src/stm32f0xx_ll_pwr.c
 STM32F0xx_HAL_Driver/Src/stm32f0xx_ll_rcc.c
 STM32F0xx_HAL_Driver/Src/stm32f0xx_ll_utils.c
+STM32F0xx_HAL_Driver/Src/stm32f0xx_hal_gpio.c
 """)
-
-if GetDepend(['RT_USING_PIN']):
-    src += ['STM32F0xx_HAL_Driver/Src/stm32f0xx_hal_gpio.c']
 
 if GetDepend(['RT_USING_SERIAL']):
     src += ['STM32F0xx_HAL_Driver/Src/stm32f0xx_hal_uart.c']
@@ -83,6 +81,6 @@ path = [cwd + '/CMSIS/Device/ST/STM32F0xx/Include',
     cwd + '/CMSIS/Include']
 
 CPPDEFINES = ['USE_HAL_DRIVER']
-group = DefineGroup('STM32_HAL', src, depend = [''], CPPPATH = path, CPPDEFINES = CPPDEFINES)
+group = DefineGroup('Libraries', src, depend = [''], CPPPATH = path, CPPDEFINES = CPPDEFINES)
 
 Return('group')

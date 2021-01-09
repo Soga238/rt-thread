@@ -54,7 +54,6 @@ static rt_slist_t _socket_list = RT_SLIST_OBJECT_INIT(_socket_list);
 struct at_socket *at_get_socket(int socket)
 {
     rt_base_t level;
-    size_t list_num = 0;
     rt_slist_t *node = RT_NULL;
     struct at_socket *at_sock = RT_NULL;
 
@@ -62,9 +61,9 @@ struct at_socket *at_get_socket(int socket)
 
     rt_slist_for_each(node, &_socket_list)
     {
-        if (socket == (list_num++))
+        at_sock = rt_slist_entry(node, struct at_socket, list);
+        if (socket == at_sock->socket)
         {
-            at_sock = rt_slist_entry(node, struct at_socket, list);
             if (at_sock && at_sock->magic == AT_SOCKET_MAGIC)
             {
                 rt_hw_interrupt_enable(level);
@@ -275,7 +274,35 @@ static void at_do_event_clean(struct at_socket *sock, at_event_t event)
     }
 }
 
-static struct at_socket *alloc_socket_by_device(struct at_device *device)
+static int alloc_empty_socket(rt_slist_t *l)
+{
+    rt_base_t level;
+    rt_slist_t *node = RT_NULL;
+    rt_slist_t *pre_node = &_socket_list;
+    struct at_socket *at_sock = RT_NULL;
+    int idx = 0;
+
+    level = rt_hw_interrupt_disable();
+
+    rt_slist_init(l);
+
+    rt_slist_for_each(node, &_socket_list)
+    {
+        at_sock = rt_slist_entry(node, struct at_socket, list);
+        if(at_sock->socket != idx)  
+            break;
+        idx++;
+        pre_node = node;
+    }
+
+    rt_slist_insert(pre_node, l);
+
+    rt_hw_interrupt_enable(level);
+
+    return idx;
+}
+
+static struct at_socket *alloc_socket_by_device(struct at_device *device, enum at_socket_type type)
 {
     static rt_mutex_t at_slock = RT_NULL;
     struct at_socket *sock = RT_NULL;
@@ -296,29 +323,24 @@ static struct at_socket *alloc_socket_by_device(struct at_device *device)
     rt_mutex_take(at_slock, RT_WAITING_FOREVER);
 
     /* find an empty at socket entry */
-    for (idx = 0; idx < device->class->socket_num && device->sockets[idx].magic; idx++);
+    if (device->class->socket_ops->at_socket != RT_NULL)
+    {
+        idx = device->class->socket_ops->at_socket(device, type);
+    }
+    else
+    {
+        for (idx = 0; idx < device->class->socket_num && device->sockets[idx].magic; idx++);
+    }
 
     /* can't find an empty protocol family entry */
-    if (idx == device->class->socket_num)
+    if (idx < 0 || idx >= device->class->socket_num)
     {
         goto __err;
     }
-
-    /* add device socket to global socket list */
-    {
-        rt_base_t level;
-
-        level = rt_hw_interrupt_disable();
-
-        rt_slist_init(&(device->sockets[idx].list));
-        rt_slist_append(&_socket_list, &(device->sockets[idx].list));
-
-        rt_hw_interrupt_enable(level);
-    }
-
+    
     sock = &(device->sockets[idx]);
     /* the socket descriptor is the number of sockte lists */
-    sock->socket = rt_slist_len(&_socket_list) - 1;
+    sock->socket = alloc_empty_socket(&(sock->list));
     /* the socket operations is the specify operations of the device */
     sock->ops = device->class->socket_ops;
     /* the user-data is the at device socket descriptor */
@@ -359,7 +381,7 @@ __err:
     return RT_NULL;
 }
 
-static struct at_socket *alloc_socket(void)
+static struct at_socket *alloc_socket(enum at_socket_type type)
 {
     extern struct netdev *netdev_default;
     struct netdev *netdev = RT_NULL;
@@ -386,8 +408,11 @@ static struct at_socket *alloc_socket(void)
         return RT_NULL;
     }
 
-    return alloc_socket_by_device(device);
+    return alloc_socket_by_device(device, type);
 }
+
+static void at_recv_notice_cb(struct at_socket *sock, at_socket_evt_t event, const char *buff, size_t bfsz);
+static void at_closed_notice_cb(struct at_socket *sock, at_socket_evt_t event, const char *buff, size_t bfsz);
 
 int at_socket(int domain, int type, int protocol)
 {
@@ -415,13 +440,17 @@ int at_socket(int domain, int type, int protocol)
     }
 
     /* allocate and initialize a new AT socket */
-    sock = alloc_socket();
+    sock = alloc_socket(socket_type);
     if (sock == RT_NULL)
     {
         return -1;
     }
     sock->type = socket_type;
     sock->state = AT_SOCKET_OPEN;
+
+    /* set AT socket receive data callback function */
+    sock->ops->at_set_event_cb(AT_SOCKET_EVT_RECV, at_recv_notice_cb);
+    sock->ops->at_set_event_cb(AT_SOCKET_EVT_CLOSED, at_closed_notice_cb);
 
     return sock->socket;
 }
@@ -446,7 +475,6 @@ static int free_socket(struct at_socket *sock)
     /* delect socket from socket list */
     {
         rt_base_t level;
-        int list_num = 0;
         rt_slist_t *node = RT_NULL;
         struct at_socket *at_sock = RT_NULL;
 
@@ -454,10 +482,10 @@ static int free_socket(struct at_socket *sock)
 
         rt_slist_for_each(node, &_socket_list)
         {
-            if (sock->socket == (list_num++))
+            at_sock = rt_slist_entry(node, struct at_socket, list);
+            if (sock->socket == at_sock->socket)
             {
-                at_sock = rt_slist_entry(node, struct at_socket, list);
-                if (at_sock)
+                if (at_sock && at_sock->magic == AT_SOCKET_MAGIC)
                 {
                     rt_slist_remove(&_socket_list, &at_sock->list);
                     break;
@@ -594,7 +622,7 @@ int at_bind(int socket, const struct sockaddr *name, socklen_t namelen)
         }
 
         /* allocate new socket */
-        new_sock = alloc_socket_by_device(new_device);
+        new_sock = alloc_socket_by_device(new_device, type);
         if (new_sock == RT_NULL)
         {
             return -1;
@@ -689,10 +717,6 @@ int at_connect(int socket, const struct sockaddr *name, socklen_t namelen)
 
     sock->state = AT_SOCKET_CONNECT;
 
-    /* set AT socket receive data callback function */
-    sock->ops->at_set_event_cb(AT_SOCKET_EVT_RECV, at_recv_notice_cb);
-    sock->ops->at_set_event_cb(AT_SOCKET_EVT_CLOSED, at_closed_notice_cb);
-
 __exit:
 
     if (result < 0)
@@ -730,7 +754,7 @@ int at_recvfrom(int socket, void *mem, size_t len, int flags, struct sockaddr *f
         goto __exit;
     }
 
-    /* if the socket type is UDP, nead to connect socket first */
+    /* if the socket type is UDP, need to connect socket first */
     if (from && sock->type == AT_SOCKET_UDP && sock->state == AT_SOCKET_OPEN)
     {
         ip_addr_t remote_addr;
@@ -746,9 +770,6 @@ int at_recvfrom(int socket, void *mem, size_t len, int flags, struct sockaddr *f
             goto __exit;
         }
         sock->state = AT_SOCKET_CONNECT;
-        /* set AT socket receive data callback function */
-        sock->ops->at_set_event_cb(AT_SOCKET_EVT_RECV, at_recv_notice_cb);
-        sock->ops->at_set_event_cb(AT_SOCKET_EVT_CLOSED, at_closed_notice_cb);
     }
 
     /* receive packet list last transmission of remaining data */
@@ -800,24 +821,17 @@ int at_recvfrom(int socket, void *mem, size_t len, int flags, struct sockaddr *f
             goto __exit;
         }
         else
-        {
-            if (sock->state == AT_SOCKET_CONNECT)
+        {         
+
+            /* get receive buffer to receiver ring buffer */
+            rt_mutex_take(sock->recv_lock, RT_WAITING_FOREVER);
+            recv_len = at_recvpkt_get(&(sock->recvpkt_list), (char *) mem, len);
+            rt_mutex_release(sock->recv_lock);
+            if (recv_len > 0)
             {
-                /* get receive buffer to receiver ring buffer */
-                rt_mutex_take(sock->recv_lock, RT_WAITING_FOREVER);
-                recv_len = at_recvpkt_get(&(sock->recvpkt_list), (char *) mem, len);
-                rt_mutex_release(sock->recv_lock);
-                if (recv_len > 0)
-                {
-                    break;
-                }
+                break;
             }
-            else
-            {
-                LOG_D("received data exit, current socket (%d) is closed by remote.", socket);
-                result = 0;
-                goto __exit;
-            }
+
         }
     }
 
@@ -856,7 +870,7 @@ int at_recv(int s, void *mem, size_t len, int flags)
 int at_sendto(int socket, const void *data, size_t size, int flags, const struct sockaddr *to, socklen_t tolen)
 {
     struct at_socket *sock = RT_NULL;
-    int len, result = 0;
+    int len = 0, result = 0;
 
     if (data == RT_NULL || size == 0)
     {
@@ -910,9 +924,6 @@ int at_sendto(int socket, const void *data, size_t size, int flags, const struct
                 goto __exit;
             }
             sock->state = AT_SOCKET_CONNECT;
-            /* set AT socket receive data callback function */
-            sock->ops->at_set_event_cb(AT_SOCKET_EVT_RECV, at_recv_notice_cb);
-            sock->ops->at_set_event_cb(AT_SOCKET_EVT_CLOSED, at_closed_notice_cb);
         }
 
         if ((len = sock->ops->at_send(sock, (char *) data, size, sock->type)) < 0)

@@ -102,7 +102,7 @@ rt_err_t rt_wlan_dev_connect(struct rt_wlan_device *device, struct rt_wlan_info 
     if ((password_len > RT_WLAN_PASSWORD_MAX_LENGTH) ||
             (info->ssid.len > RT_WLAN_SSID_MAX_LENGTH))
     {
-        LOG_E("L:%d password or ssid is to long", __LINE__);
+        LOG_E("L:%d password or ssid is too long", __LINE__);
         return -RT_ERROR;
     }
     rt_memset(&sta_info, 0, sizeof(struct rt_sta_info));
@@ -147,10 +147,10 @@ rt_err_t rt_wlan_dev_ap_start(struct rt_wlan_device *device, struct rt_wlan_info
         return -RT_ERROR;
     }
 
-    if ((password_len >= RT_WLAN_PASSWORD_MAX_LENGTH) ||
-            (info->ssid.len >= RT_WLAN_SSID_MAX_LENGTH))
+    if ((password_len > RT_WLAN_PASSWORD_MAX_LENGTH) ||
+            (info->ssid.len > RT_WLAN_SSID_MAX_LENGTH))
     {
-        LOG_E("L:%d password or ssid is to long", __LINE__);
+        LOG_E("L:%d password or ssid is too long", __LINE__);
         return -RT_ERROR;
     }
 
@@ -528,15 +528,24 @@ rt_err_t rt_wlan_dev_scan(struct rt_wlan_device *device, struct rt_wlan_info *in
 
     if (info != RT_NULL)
     {
-        if (info->ssid.len >= RT_WLAN_SSID_MAX_LENGTH)
+        if (info->ssid.len > RT_WLAN_SSID_MAX_LENGTH)
         {
-            LOG_E("L:%d ssid is to long", __LINE__);
+            LOG_E("L:%d ssid is too long", __LINE__);
             return -RT_EINVAL;
         }
         rt_memcpy(&scan_info.ssid, &info->ssid, sizeof(rt_wlan_ssid_t));
         rt_memcpy(scan_info.bssid, info->bssid, RT_WLAN_BSSID_MAX_LENGTH);
-        scan_info.channel_min = -1;
-        scan_info.channel_max = -1;
+        if (info->channel > 0)
+        {
+            scan_info.channel_min = info->channel;
+            scan_info.channel_max = info->channel;
+        }
+        else
+        {
+            scan_info.channel_min = -1;
+            scan_info.channel_max = -1;
+        }
+        scan_info.passive = info->hidden ? RT_TRUE : RT_FALSE;
         p_scan_info = &scan_info;
     }
     result = rt_device_control(RT_DEVICE(device), RT_WLAN_CMD_SCAN, p_scan_info);
@@ -563,6 +572,77 @@ rt_err_t rt_wlan_dev_report_data(struct rt_wlan_device *device, void *buff, int 
 #else
     return -RT_ERROR;
 #endif
+}
+
+rt_err_t rt_wlan_dev_enter_mgnt_filter(struct rt_wlan_device *device)
+{
+    rt_err_t result = RT_EOK;
+    int enable = 1;
+
+    if (device == RT_NULL)
+    {
+        return -RT_EIO;
+    }
+
+    result = rt_device_control(RT_DEVICE(device), RT_WLAN_CMD_CFG_MGNT_FILTER, &enable);
+    return result;
+}
+
+rt_err_t rt_wlan_dev_exit_mgnt_filter(struct rt_wlan_device *device)
+{
+    rt_err_t result = RT_EOK;
+    int enable = 0;
+
+    if (device == RT_NULL)
+    {
+        return -RT_EIO;
+    }
+
+    result = rt_device_control(RT_DEVICE(device), RT_WLAN_CMD_CFG_MGNT_FILTER, &enable);
+    return result;
+}
+
+rt_err_t rt_wlan_dev_set_mgnt_filter_callback(struct rt_wlan_device *device, rt_wlan_mgnt_filter_callback_t callback)
+{
+    if (device == RT_NULL)
+    {
+        return -RT_EIO;
+    }
+    device->mgnt_filter_callback = callback;
+
+    return RT_EOK;
+}
+
+void rt_wlan_dev_mgnt_filter_handler(struct rt_wlan_device *device, void *data, int len)
+{
+    rt_wlan_mgnt_filter_callback_t callback;
+
+    if (device == RT_NULL)
+    {
+        return;
+    }
+
+    callback = device->mgnt_filter_callback;
+
+    if (callback != RT_NULL)
+    {
+        callback(device, data, len);
+    }
+}
+
+int rt_wlan_dev_send_raw_frame(struct rt_wlan_device *device, void *buff, int len)
+{
+    if (device == RT_NULL)
+    {
+        return -RT_EIO;
+    }
+
+    if (device->ops->wlan_send_raw_frame)
+    {
+        return device->ops->wlan_send_raw_frame(device, buff, len);
+    }
+
+    return -RT_ERROR;
 }
 
 static rt_err_t _rt_wlan_dev_init(rt_device_t dev)
@@ -705,6 +785,15 @@ static rt_err_t _rt_wlan_dev_control(rt_device_t dev, int cmd, void *args)
         LOG_D("%s %d cmd[%d]:%s  run......", __FUNCTION__, __LINE__, RT_WLAN_CMD_CFG_FILTER, "RT_WLAN_CMD_CFG_FILTER");
         if (wlan->ops->wlan_cfg_filter)
             err = wlan->ops->wlan_cfg_filter(wlan, filter);
+        break;
+    }
+    case RT_WLAN_CMD_CFG_MGNT_FILTER:
+    {
+        rt_bool_t start = *((rt_bool_t *)args);
+
+        LOG_D("%s %d cmd[%d]:%s  run......", __FUNCTION__, __LINE__, RT_WLAN_CMD_CFG_MGNT_FILTER, "RT_WLAN_CMD_CFG_MGNT_FILTER");
+        if (wlan->ops->wlan_cfg_mgnt_filter)
+            err = wlan->ops->wlan_cfg_mgnt_filter(wlan, start);
         break;
     }
     case RT_WLAN_CMD_SET_CHANNEL:
